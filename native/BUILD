@@ -13,6 +13,12 @@ cuda_library(
     hdrs = ["conv1d_cuda.hh"],
 )
 
+cuda_library(
+    name = "linear_recurrence_cuda",
+    srcs = ["linear_recurrence_cuda.cu"],
+    hdrs = ["linear_recurrence_cuda.hh"],
+)
+
 pybind_extension(
     name="_torch_hawk",
     srcs=[
@@ -24,5 +30,6 @@ pybind_extension(
     }),
     deps=[
         ":conv1d_cuda",
+        ":linear_recurrence_cuda",
     ],
 )
