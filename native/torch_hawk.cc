@@ -7,69 +7,177 @@
 #include "conv1d_cuda.hh"
 #include "linear_recurrence_cuda.hh"
 
+#include "dlpack.h"
+
 namespace {
 
-    void* get_cuda_pointer(const pybind11::object& obj, std::string_view expected_type, const std::vector<int>& expected_shape) {
-        pybind11::dict interface = obj.attr("__cuda_array_interface__");
-        if (interface["version"].cast<int>() != 2) {
-            throw std::invalid_argument("Unsupported Version");
-        }
-        if (!interface["strides"].cast<pybind11::object>().is(pybind11::none())) {
-            throw std::invalid_argument("Need no strides");
-        }
-        if (interface["typestr"].cast<std::string>() != expected_type) {
-            throw std::invalid_argument(std::string("Invalid type, expected ") + std::string(expected_type) + ", got " + std::string(pybind11::str(interface["typestr"])));
+    void* get_cuda_pointer(const pybind11::object& obj, DLDataTypeCode dtype, int bits, const std::vector<int>& expected_shape) {
+        pybind11::capsule cap = obj.attr("__dlpack__")();
+
+        if (strcmp(cap.name(), "dltensor") != 0) {
+            throw std::invalid_argument("Did not get tensor back");
         }
 
-        pybind11::tuple expected_shape_helper(expected_shape.size());
+        DLManagedTensor *managed = (DLManagedTensor *)(cap.get_pointer());
+
+        if (managed == nullptr) {
+            throw std::invalid_argument("Got nullptr tensor back");
+
+        }
+        DLTensor& tensor = managed->dl_tensor;
+
+        if (tensor.strides != nullptr) {
+            int expected_stride = 1;
+            for (int i = tensor.ndim - 1; i >= 0; i--) {
+                if (tensor.strides[i] != expected_stride) {
+                    throw std::invalid_argument("Bad stride");
+                }
+                expected_stride *= tensor.shape[i];
+            }
+        }
+
+        if (dtype != tensor.dtype.code) {
+            throw std::invalid_argument("Bad type");
+        }
+
+        if (bits != tensor.dtype.bits) {
+            throw std::invalid_argument("Bad type");
+        }
+
+        if (1 != tensor.dtype.lanes) {
+            throw std::invalid_argument("Bad type");
+        }
+
+        if ((int)expected_shape.size() != tensor.ndim) {
+            throw std::invalid_argument("Wrong number of dimensions");
+        }
+
         for (size_t i = 0; i < expected_shape.size(); i++) {
-            expected_shape_helper[i] = expected_shape[i];
+            if (expected_shape[i] != tensor.shape[i]) {
+                throw std::invalid_argument("Invalid shape");
+            }
         }
 
-        if (!interface["shape"].cast<pybind11::tuple>().equal(expected_shape_helper)) {
-            throw std::invalid_argument("Invalid shape");
+        if (tensor.byte_offset != 0) {
+            throw std::invalid_argument("Bad byte offset");
         }
 
-        pybind11::tuple data = interface["data"];
-        return (void*)data[0].cast<uintptr_t>();
+        return (void*)tensor.data;
     }
 
-    void conv1d_forward_cuda_helper(pybind11::object x, pybind11::object w, pybind11::object s, pybind11::object o, int n, int k) {
-        void* x_ptr = get_cuda_pointer(x, "<f2", {n, k});
-        void* w_ptr = get_cuda_pointer(w, "<f2", {k, conv1d_kernel_size()});
-        void* s_ptr = get_cuda_pointer(s, "|u1", {n});
-        void* o_ptr = get_cuda_pointer(o, "<f2", {n, k});
-        conv1d_forward_cuda(x_ptr, w_ptr, s_ptr, o_ptr, n, k);
+    void conv1d_forward_cuda_helper_fp16(pybind11::object x, pybind11::object w, pybind11::object s, pybind11::object o, int n, int k) {
+        void* x_ptr = get_cuda_pointer(x, kDLFloat, 16, {n, k});
+        void* w_ptr = get_cuda_pointer(w, kDLFloat, 16, {k, conv1d_kernel_size()});
+        void* s_ptr = get_cuda_pointer(s, kDLUInt, 8, {n});
+        void* o_ptr = get_cuda_pointer(o, kDLFloat, 16, {n, k});
+        conv1d_forward_cuda_fp16(x_ptr, w_ptr, s_ptr, o_ptr, n, k);
     }
 
-    void conv1d_backward_cuda_helper(pybind11::object x, pybind11::object w, pybind11::object s, pybind11::object d_o, pybind11::object d_x, pybind11::object d_w, int n, int k) {
-        void* x_ptr = get_cuda_pointer(x, "<f2", {n, k});
-        void* w_ptr = get_cuda_pointer(w, "<f2", {k, conv1d_kernel_size()});
-        void* s_ptr = get_cuda_pointer(s, "|u1", {n});
-        void* d_o_ptr = get_cuda_pointer(d_o, "<f2", {n, k});
-        void* d_x_ptr = get_cuda_pointer(d_x, "<f2", {n, k});
-        void* d_w_ptr = get_cuda_pointer(d_w, "<f4", {k, conv1d_kernel_size()});
-        conv1d_backward_cuda(x_ptr, w_ptr, s_ptr, d_o_ptr, d_x_ptr, d_w_ptr, n, k);
+    void conv1d_backward_cuda_helper_fp16(pybind11::object x, pybind11::object w, pybind11::object s, pybind11::object d_o, pybind11::object d_x, pybind11::object d_w, int n, int k) {
+        void* x_ptr = get_cuda_pointer(x, kDLFloat, 16, {n, k});
+        void* w_ptr = get_cuda_pointer(w, kDLFloat, 16, {k, conv1d_kernel_size()});
+        void* s_ptr = get_cuda_pointer(s, kDLUInt, 8, {n});
+        void* d_o_ptr = get_cuda_pointer(d_o, kDLFloat, 16, {n, k});
+        void* d_x_ptr = get_cuda_pointer(d_x, kDLFloat, 16, {n, k});
+        void* d_w_ptr = get_cuda_pointer(d_w, kDLFloat, 32, {k, conv1d_kernel_size()});
+        conv1d_backward_cuda_fp16(x_ptr, w_ptr, s_ptr, d_o_ptr, d_x_ptr, d_w_ptr, n, k);
+    }
+
+    void conv1d_forward_cuda_helper_bf16(pybind11::object x, pybind11::object w, pybind11::object s, pybind11::object o, int n, int k) {
+        void* x_ptr = get_cuda_pointer(x, kDLBfloat, 16, {n, k});
+        void* w_ptr = get_cuda_pointer(w, kDLBfloat, 16, {k, conv1d_kernel_size()});
+        void* s_ptr = get_cuda_pointer(s, kDLUInt, 8, {n});
+        void* o_ptr = get_cuda_pointer(o, kDLBfloat, 16, {n, k});
+        conv1d_forward_cuda_bf16(x_ptr, w_ptr, s_ptr, o_ptr, n, k);
+    }
+
+    void conv1d_backward_cuda_helper_bf16(pybind11::object x, pybind11::object w, pybind11::object s, pybind11::object d_o, pybind11::object d_x, pybind11::object d_w, int n, int k) {
+        void* x_ptr = get_cuda_pointer(x, kDLBfloat, 16, {n, k});
+        void* w_ptr = get_cuda_pointer(w, kDLBfloat, 16, {k, conv1d_kernel_size()});
+        void* s_ptr = get_cuda_pointer(s, kDLUInt, 8, {n});
+        void* d_o_ptr = get_cuda_pointer(d_o, kDLBfloat, 16, {n, k});
+        void* d_x_ptr = get_cuda_pointer(d_x, kDLBfloat, 16, {n, k});
+        void* d_w_ptr = get_cuda_pointer(d_w, kDLFloat, 32, {k, conv1d_kernel_size()});
+        conv1d_backward_cuda_bf16(x_ptr, w_ptr, s_ptr, d_o_ptr, d_x_ptr, d_w_ptr, n, k);
     }
 
 
-    void linear_recurrence_forward_cuda_helper(pybind11::object a, pybind11::object x, pybind11::object o, pybind11::object s, int n, int k) {
-        void* a_ptr = get_cuda_pointer(a, "<f2", {n, k});
-        void* x_ptr = get_cuda_pointer(x, "<f2", {n, k});
-        void* o_ptr = get_cuda_pointer(o, "<f2", {n, k});
-        void* s_ptr = get_cuda_pointer(s, "<f4", linear_recurrence_scratch_space(n, k));
-        linear_recurrence_forward_cuda(a_ptr, x_ptr, o_ptr, s_ptr, n, k);
+    void conv1d_forward_cuda_helper_fp32(pybind11::object x, pybind11::object w, pybind11::object s, pybind11::object o, int n, int k) {
+        void* x_ptr = get_cuda_pointer(x, kDLFloat, 32, {n, k});
+        void* w_ptr = get_cuda_pointer(w, kDLFloat, 32, {k, conv1d_kernel_size()});
+        void* s_ptr = get_cuda_pointer(s, kDLUInt, 8, {n});
+        void* o_ptr = get_cuda_pointer(o, kDLFloat, 32, {n, k});
+        conv1d_forward_cuda_fp32(x_ptr, w_ptr, s_ptr, o_ptr, n, k);
     }
 
-    void linear_recurrence_backward_cuda_helper(pybind11::object a, pybind11::object o, pybind11::object s, 
+    void conv1d_backward_cuda_helper_fp32(pybind11::object x, pybind11::object w, pybind11::object s, pybind11::object d_o, pybind11::object d_x, pybind11::object d_w, int n, int k) {
+        void* x_ptr = get_cuda_pointer(x, kDLFloat, 32, {n, k});
+        void* w_ptr = get_cuda_pointer(w, kDLFloat, 32, {k, conv1d_kernel_size()});
+        void* s_ptr = get_cuda_pointer(s, kDLUInt, 8, {n});
+        void* d_o_ptr = get_cuda_pointer(d_o, kDLFloat, 32, {n, k});
+        void* d_x_ptr = get_cuda_pointer(d_x, kDLFloat, 32, {n, k});
+        void* d_w_ptr = get_cuda_pointer(d_w, kDLFloat, 32, {k, conv1d_kernel_size()});
+        conv1d_backward_cuda_fp32(x_ptr, w_ptr, s_ptr, d_o_ptr, d_x_ptr, d_w_ptr, n, k);
+    }
+
+
+    void linear_recurrence_forward_cuda_helper_fp16(pybind11::object a, pybind11::object x, pybind11::object o, pybind11::object s, int n, int k) {
+        void* a_ptr = get_cuda_pointer(a, kDLFloat, 16, {n, k});
+        void* x_ptr = get_cuda_pointer(x, kDLFloat, 16, {n, k});
+        void* o_ptr = get_cuda_pointer(o, kDLFloat, 16, {n, k});
+        void* s_ptr = get_cuda_pointer(s, kDLFloat, 32, linear_recurrence_scratch_space(n, k));
+        linear_recurrence_forward_cuda_fp16(a_ptr, x_ptr, o_ptr, s_ptr, n, k);
+    }
+
+    void linear_recurrence_backward_cuda_helper_fp16(pybind11::object a, pybind11::object o, pybind11::object s, 
     pybind11::object d_a,  pybind11::object d_x,  pybind11::object d_o, int n, int k) {
-        void* a_ptr = get_cuda_pointer(a, "<f2", {n, k});
-        void* o_ptr = get_cuda_pointer(o, "<f2", {n, k});
-        void* s_ptr = get_cuda_pointer(s, "<f4", linear_recurrence_scratch_space(n, k));
-        void* d_a_ptr = get_cuda_pointer(d_a, "<f2", {n, k});
-        void* d_x_ptr = get_cuda_pointer(d_x, "<f2", {n, k});
-        void* d_o_ptr = get_cuda_pointer(d_o, "<f2", {n, k});
-        linear_recurrence_backward_cuda(a_ptr, o_ptr, s_ptr, d_a_ptr, d_x_ptr, d_o_ptr, n, k);
+        void* a_ptr = get_cuda_pointer(a, kDLFloat, 16, {n, k});
+        void* o_ptr = get_cuda_pointer(o, kDLFloat, 16, {n, k});
+        void* s_ptr = get_cuda_pointer(s, kDLFloat, 32, linear_recurrence_scratch_space(n, k));
+        void* d_a_ptr = get_cuda_pointer(d_a, kDLFloat, 16, {n, k});
+        void* d_x_ptr = get_cuda_pointer(d_x, kDLFloat, 16, {n, k});
+        void* d_o_ptr = get_cuda_pointer(d_o, kDLFloat, 16, {n, k});
+        linear_recurrence_backward_cuda_fp16(a_ptr, o_ptr, s_ptr, d_a_ptr, d_x_ptr, d_o_ptr, n, k);
+    }
+
+    void linear_recurrence_forward_cuda_helper_bf16(pybind11::object a, pybind11::object x, pybind11::object o, pybind11::object s, int n, int k) {
+        void* a_ptr = get_cuda_pointer(a, kDLBfloat, 16, {n, k});
+        void* x_ptr = get_cuda_pointer(x, kDLBfloat, 16, {n, k});
+        void* o_ptr = get_cuda_pointer(o, kDLBfloat, 16, {n, k});
+        void* s_ptr = get_cuda_pointer(s, kDLFloat, 32, linear_recurrence_scratch_space(n, k));
+        linear_recurrence_forward_cuda_bf16(a_ptr, x_ptr, o_ptr, s_ptr, n, k);
+    }
+
+    void linear_recurrence_backward_cuda_helper_bf16(pybind11::object a, pybind11::object o, pybind11::object s, 
+    pybind11::object d_a,  pybind11::object d_x,  pybind11::object d_o, int n, int k) {
+        void* a_ptr = get_cuda_pointer(a, kDLBfloat, 16, {n, k});
+        void* o_ptr = get_cuda_pointer(o, kDLBfloat, 16, {n, k});
+        void* s_ptr = get_cuda_pointer(s, kDLFloat, 32, linear_recurrence_scratch_space(n, k));
+        void* d_a_ptr = get_cuda_pointer(d_a, kDLBfloat, 16, {n, k});
+        void* d_x_ptr = get_cuda_pointer(d_x, kDLBfloat, 16, {n, k});
+        void* d_o_ptr = get_cuda_pointer(d_o, kDLBfloat, 16, {n, k});
+        linear_recurrence_backward_cuda_bf16(a_ptr, o_ptr, s_ptr, d_a_ptr, d_x_ptr, d_o_ptr, n, k);
+    }
+
+
+
+    void linear_recurrence_forward_cuda_helper_fp32(pybind11::object a, pybind11::object x, pybind11::object o, pybind11::object s, int n, int k) {
+        void* a_ptr = get_cuda_pointer(a, kDLFloat, 32, {n, k});
+        void* x_ptr = get_cuda_pointer(x, kDLFloat, 32, {n, k});
+        void* o_ptr = get_cuda_pointer(o, kDLFloat, 32, {n, k});
+        void* s_ptr = get_cuda_pointer(s, kDLFloat, 32, linear_recurrence_scratch_space(n, k));
+        linear_recurrence_forward_cuda_fp32(a_ptr, x_ptr, o_ptr, s_ptr, n, k);
+    }
+
+    void linear_recurrence_backward_cuda_helper_fp32(pybind11::object a, pybind11::object o, pybind11::object s, 
+    pybind11::object d_a,  pybind11::object d_x,  pybind11::object d_o, int n, int k) {
+        void* a_ptr = get_cuda_pointer(a, kDLFloat, 32, {n, k});
+        void* o_ptr = get_cuda_pointer(o, kDLFloat, 32, {n, k});
+        void* s_ptr = get_cuda_pointer(s, kDLFloat, 32, linear_recurrence_scratch_space(n, k));
+        void* d_a_ptr = get_cuda_pointer(d_a, kDLFloat, 32, {n, k});
+        void* d_x_ptr = get_cuda_pointer(d_x, kDLFloat, 32, {n, k});
+        void* d_o_ptr = get_cuda_pointer(d_o, kDLFloat, 32, {n, k});
+        linear_recurrence_backward_cuda_fp32(a_ptr, o_ptr, s_ptr, d_a_ptr, d_x_ptr, d_o_ptr, n, k);
     }
 
     void conv1d_forward_cpu(pybind11::array_t<float> x, pybind11::array_t<float> w, pybind11::array_t<uint8_t> s, pybind11::array_t<float> o, int n, int k) {
@@ -147,14 +255,30 @@ PYBIND11_MODULE(_torch_hawk, m) {
     m.def("conv1d_backward_cpu", &conv1d_backward_cpu, "A function that adds two numbers");
 
 
-    m.def("conv1d_forward_cuda", &conv1d_forward_cuda_helper, "A function that adds two numbers");
-    m.def("conv1d_backward_cuda", &conv1d_backward_cuda_helper, "A function that adds two numbers");
+    m.def("conv1d_forward_cuda_fp32", &conv1d_forward_cuda_helper_fp32, "A function that adds two numbers");
+    m.def("conv1d_backward_cuda_fp32", &conv1d_backward_cuda_helper_fp32, "A function that adds two numbers");
+    
+
+    m.def("conv1d_forward_cuda_fp16", &conv1d_forward_cuda_helper_fp16, "A function that adds two numbers");
+    m.def("conv1d_backward_cuda_fp16", &conv1d_backward_cuda_helper_fp16, "A function that adds two numbers");
+
+    m.def("conv1d_forward_cuda_bf16", &conv1d_forward_cuda_helper_bf16, "A function that adds two numbers");
+    m.def("conv1d_backward_cuda_bf16", &conv1d_backward_cuda_helper_bf16, "A function that adds two numbers");
+
+
     m.def("conv1d_kernel_size", &conv1d_kernel_size, "A function that adds two numbers");
 
     m.def("linear_recurrence_forward_cpu", &linear_recurrence_forward_cpu, "A function that adds two numbers");
     m.def("linear_recurrence_backward_cpu", &linear_recurrence_backward_cpu, "A function that adds two numbers");
 
-    m.def("linear_recurrence_forward_cuda", &linear_recurrence_forward_cuda_helper, "A function that adds two numbers");
-    m.def("linear_recurrence_backward_cuda", &linear_recurrence_backward_cuda_helper, "A function that adds two numbers");
+    m.def("linear_recurrence_forward_cuda_fp32", &linear_recurrence_forward_cuda_helper_fp32, "A function that adds two numbers");
+    m.def("linear_recurrence_backward_cuda_fp32", &linear_recurrence_backward_cuda_helper_fp32, "A function that adds two numbers");
+   
+    m.def("linear_recurrence_forward_cuda_fp16", &linear_recurrence_forward_cuda_helper_fp16, "A function that adds two numbers");
+    m.def("linear_recurrence_backward_cuda_fp16", &linear_recurrence_backward_cuda_helper_fp16, "A function that adds two numbers");
+    
+    m.def("linear_recurrence_forward_cuda_bf16", &linear_recurrence_forward_cuda_helper_bf16, "A function that adds two numbers");
+    m.def("linear_recurrence_backward_cuda_bf16", &linear_recurrence_backward_cuda_helper_bf16, "A function that adds two numbers");
+    
     m.def("linear_recurrence_scratch_space", &linear_recurrence_scratch_space, "A function that adds two numbers");
 }

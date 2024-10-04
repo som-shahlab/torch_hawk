@@ -2,8 +2,8 @@ import torch
 
 import torch_hawk
 
-dtype = torch.float32
-device = torch.device('cpu')
+dtype = torch.float16
+device = torch.device('cuda')
 
 n = 200
 r = 5
@@ -38,7 +38,14 @@ w_copy.requires_grad = True
 o1 = torch_hawk.conv1d(x_copy, w_copy, s)
 o2 = torch.nn.functional.conv1d(x.reshape((c, n // c, k)).transpose(1, 2), w.unsqueeze(1), padding=3, groups=k)[:, :, :-3].transpose(2, 1).reshape(n , k)
 
-assert torch.allclose(o1, o2, rtol=1e-3, atol=1e-3)
+if dtype == torch.float32:
+    rtol=1e-6
+    atol=1e-6
+else:
+    rtol = 1e-3
+    atol = 1e-3
+
+assert torch.allclose(o1, o2, rtol=rtol, atol=atol)
 
 total = (o1 * d_o).sum()
 total.backward()
@@ -50,9 +57,12 @@ total.backward()
 assert x.grad is not None
 assert x_copy.grad is not None
 
-assert torch.allclose(x_copy.grad, x.grad, rtol=1e-3, atol=1e-3)
+assert torch.allclose(x_copy.grad, x.grad, rtol=rtol, atol=atol)
 
 assert w.grad is not None
 assert w_copy.grad is not None
 
-assert torch.allclose(w_copy.grad, w.grad, rtol=1e-2, atol=1e-2)
+print(w_copy.grad)
+print(w.grad)
+
+assert torch.allclose(w_copy.grad, w.grad, rtol=rtol, atol=atol)

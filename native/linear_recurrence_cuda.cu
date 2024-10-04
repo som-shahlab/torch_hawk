@@ -1,4 +1,5 @@
 #include <cuda_fp16.h>
+#include <cuda_bf16.h>
 #include <cstdint>
 #include <cstdio>
 
@@ -22,8 +23,51 @@ const int LENGTH_PER_WARP = 8;
 
 const int FEATS_PER_WARP = WARP_SIZE * 2;
 
-__global__ void linear_recurrence_forward_kernel_first(const half * __restrict__ a,
-                               const half * __restrict__ x, float * __restrict__ s,
+__device__ float2 cast_to_float2(half2 v) {
+    return __half22float2(v);
+}
+
+
+__device__ float2 cast_to_float2(float2 v) {
+    return v;
+}
+
+__device__ float2 cast_to_float2(__nv_bfloat162 v) {
+    return __bfloat1622float2(v);
+}
+
+__device__ void cast_from_float2(float2 v, half2& r) {
+    r = __float22half2_rn(v);
+}
+
+__device__ void cast_from_float2(float2 v, float2& r) {
+    r = v;
+}
+
+__device__ void cast_from_float2(float2 v, __nv_bfloat162& r) {
+    r = __float22bfloat162_rn(v);
+}
+
+__device__ float2 mul2(float2 a, float2 b) {
+    a.x *= b.x;
+    a.y *= b.y;
+    return a;
+}
+
+__device__ half2 mul2(half2 a, half2 b) {
+    return __hmul2(a, b);
+}
+
+
+__device__ __nv_bfloat162 mul2(__nv_bfloat162 a, __nv_bfloat162 b) {
+    return __hmul2(a, b);
+}
+
+
+
+template<typename SingleVal, typename DoubleVal>
+__global__ void linear_recurrence_forward_kernel_first(const SingleVal * __restrict__ a,
+                               const SingleVal * __restrict__ x, float * __restrict__ s,
                              int n, int k) {
     
     int feature_idx = FEATS_PER_WARP * blockIdx.y + threadIdx.x * 2;
@@ -51,11 +95,11 @@ __global__ void linear_recurrence_forward_kernel_first(const half * __restrict__
         if (length_idx + i >= n) {
             break;
         }
-        half2 next_x = *(half2 *)(x + i * k);
-        half2 next_a = *(half2 *)(a + i * k);
+        DoubleVal next_x = *(DoubleVal *)(x + i * k);
+        DoubleVal next_a = *(DoubleVal *)(a + i * k);
 
-        float2 next_xf = __half22float2(next_x);
-        float2 next_af = __half22float2(next_a);
+        float2 next_xf = cast_to_float2(next_x);
+        float2 next_af = cast_to_float2(next_a);
 
         current_val.x = current_val.x * next_af.x + next_xf.x;
         current_val.y = current_val.y * next_af.y + next_xf.y;
@@ -101,8 +145,9 @@ __global__ void linear_recurrence_forward_kernel_second(
 }
 
 
-__global__ void linear_recurrence_forward_kernel_third(const half * __restrict__ a,
-                               const half * __restrict__ x, half* __restrict__ o, const float * __restrict__ s,
+template<typename SingleVal, typename DoubleVal>
+__global__ void linear_recurrence_forward_kernel_third(const SingleVal * __restrict__ a,
+                               const SingleVal * __restrict__ x, SingleVal* __restrict__ o, const float * __restrict__ s,
                              int n, int k) {
     
     int feature_idx = FEATS_PER_WARP * blockIdx.y + threadIdx.x * 2;
@@ -132,25 +177,26 @@ __global__ void linear_recurrence_forward_kernel_third(const half * __restrict__
         if (length_idx + i >= n) {
             break;
         }
-        half2 next_x = *(half2 *)(x + i * k);
-        half2 next_a = *(half2 *)(a + i * k);
+        DoubleVal next_x = *(DoubleVal *)(x + i * k);
+        DoubleVal next_a = *(DoubleVal *)(a + i * k);
 
-        float2 next_xf = __half22float2(next_x);
-        float2 next_af = __half22float2(next_a);
+        float2 next_xf = cast_to_float2(next_x);
+        float2 next_af = cast_to_float2(next_a);
 
         current_val.x = current_val.x * next_af.x + next_xf.x;
         current_val.y = current_val.y * next_af.y + next_xf.y;
 
-        half2 current_half = __float22half2_rn(current_val);
+        DoubleVal current_half;
+        cast_from_float2(current_val, current_half);
 
-        *(half2 *)(o + i * k) = current_half;
+        *(DoubleVal *)(o + i * k) = current_half;
     }
 }
 
 
-
-__global__ void linear_recurrence_backward_kernel_first(const half * __restrict__ a,
-                               const half * __restrict__ d_o, float * __restrict__ s,
+template<typename SingleVal, typename DoubleVal>
+__global__ void linear_recurrence_backward_kernel_first(const SingleVal * __restrict__ a,
+                               const SingleVal * __restrict__ d_o, float * __restrict__ s,
                              int n, int k) {
     
     int feature_idx = FEATS_PER_WARP * blockIdx.y + threadIdx.x * 2;
@@ -178,14 +224,14 @@ __global__ void linear_recurrence_backward_kernel_first(const half * __restrict_
         if (length_idx + i >= n) {
             break;
         }
-        half2 next_d_o = *(half2 *)(d_o + (n - (length_idx + i) - 1) * k);
-        half2 next_a = {0, 0};
+        DoubleVal next_d_o = *(DoubleVal *)(d_o + (n - (length_idx + i) - 1) * k);
+        DoubleVal next_a = {0, 0};
         if (length_idx + i != 0) {
-            next_a = *(half2 *)(a + (n - (length_idx + i) - 1 + 1) * k);
+            next_a = *(DoubleVal *)(a + (n - (length_idx + i) - 1 + 1) * k);
         }
 
-        float2 next_d_of = __half22float2(next_d_o);
-        float2 next_af = __half22float2(next_a);
+        float2 next_d_of = cast_to_float2(next_d_o);
+        float2 next_af = cast_to_float2(next_a);
 
         current_val.x = current_val.x * next_af.x + next_d_of.x;
         current_val.y = current_val.y * next_af.y + next_d_of.y;
@@ -201,14 +247,16 @@ __global__ void linear_recurrence_backward_kernel_first(const half * __restrict_
     s[k + 1] = current_a.y;
 }
 
+
+template<typename SingleVal, typename DoubleVal>
 __global__ void linear_recurrence_backward_kernel_third(
-    const half * __restrict__ a,
-    const half* __restrict__ o, 
+    const SingleVal * __restrict__ a,
+    const SingleVal* __restrict__ o, 
     const float * __restrict__ s,
 
-    half * __restrict__ d_a,
-    half * __restrict__ d_x, 
-    const half* __restrict__ d_o, 
+    SingleVal * __restrict__ d_a,
+    SingleVal * __restrict__ d_x, 
+    const SingleVal* __restrict__ d_o, 
 
                              int n, int k) {
     int feature_idx = FEATS_PER_WARP * blockIdx.y + threadIdx.x * 2;
@@ -240,35 +288,37 @@ __global__ void linear_recurrence_backward_kernel_third(
         if (length_idx + i >= n) {
             break;
         }
-        half2 next_d_o = *(half2 *)(d_o + (n - (length_idx + i) - 1) * k);
-        half2 next_a = {0, 0};
+        DoubleVal next_d_o = *(DoubleVal *)(d_o + (n - (length_idx + i) - 1) * k);
+        DoubleVal next_a = {0, 0};
         if (length_idx + i != 0) {
-            next_a = *(half2 *)(a + (n - (length_idx + i) - 1 + 1) * k);
+            next_a = *(DoubleVal *)(a + (n - (length_idx + i) - 1 + 1) * k);
         }
 
-        float2 next_d_of = __half22float2(next_d_o);
-        float2 next_af = __half22float2(next_a);
+        float2 next_d_of = cast_to_float2(next_d_o);
+        float2 next_af = cast_to_float2(next_a);
 
         current_val.x = current_val.x * next_af.x + next_d_of.x;
         current_val.y = current_val.y * next_af.y + next_d_of.y;
 
-        half2 current_half = __float22half2_rn(current_val);
+        DoubleVal current_half;
+        cast_from_float2(current_val, current_half);
 
-        *(half2 *)(d_x + (n - (length_idx + i) - 1) * k) = current_half;
+        *(DoubleVal *)(d_x + (n - (length_idx + i) - 1) * k) = current_half;
 
 
-        half2 current_o = {0, 0};
+        DoubleVal current_o = {0, 0};
         if (length_idx + i != n - 1) {
-            current_o = *(half2 *)(o + (n - (length_idx + i) - 2) * k);    
+            current_o = *(DoubleVal *)(o + (n - (length_idx + i) - 2) * k);    
         }
 
-        *(half2 *)(d_a + (n - (length_idx + i) - 1) * k) = __hmul2(current_o, current_half);
+        *(DoubleVal *)(d_a + (n - (length_idx + i) - 1) * k) = mul2(current_o, current_half);
     }
 }
 
 
 }
 
+template<typename SingleVal, typename DoubleVal>
 void linear_recurrence_forward_cuda(
                         void *a,
                         void *x, void *o, void *s,
@@ -281,7 +331,8 @@ void linear_recurrence_forward_cuda(
     gridDim.x = (n + blockDim.y * LENGTH_PER_WARP - 1) / (blockDim.y * LENGTH_PER_WARP);
     gridDim.y = (k + FEATS_PER_WARP - 1) / FEATS_PER_WARP;
 
-    linear_recurrence_forward_kernel_first<<<gridDim, blockDim>>>((const half*) a, (const half*) x, (float*) s, n, k);
+    linear_recurrence_forward_kernel_first<SingleVal, DoubleVal><<<gridDim, blockDim>>>(
+        (const SingleVal*) a, (const SingleVal*) x, (float*) s, n, k);
 
     blockDim.x = 32;
     blockDim.y = 1;
@@ -298,9 +349,12 @@ void linear_recurrence_forward_cuda(
     gridDim.x = (n + blockDim.y * LENGTH_PER_WARP - 1) / (blockDim.y * LENGTH_PER_WARP);
     gridDim.y = (k + FEATS_PER_WARP - 1) / FEATS_PER_WARP;
 
-    linear_recurrence_forward_kernel_third<<<gridDim, blockDim>>>((const half*) a, (const half*) x, (half*) o, (const float*) s, n, k);
+    linear_recurrence_forward_kernel_third<SingleVal, DoubleVal><<<gridDim, blockDim>>>(
+        (const SingleVal*) a, (const SingleVal*) x, (SingleVal*) o, (const float*) s, n, k);
 }
 
+
+template<typename SingleVal, typename DoubleVal>
 void linear_recurrence_backward_cuda(
         void *a,
         void *o, void *s,
@@ -314,7 +368,8 @@ void linear_recurrence_backward_cuda(
     gridDim.x = (n + blockDim.y * LENGTH_PER_WARP - 1) / (blockDim.y * LENGTH_PER_WARP);
     gridDim.y = (k + FEATS_PER_WARP - 1) / FEATS_PER_WARP;
 
-    linear_recurrence_backward_kernel_first<<<gridDim, blockDim>>>((const half*) a, (const half*) d_o, (float*) s, n, k);
+    linear_recurrence_backward_kernel_first<SingleVal, DoubleVal><<<gridDim, blockDim>>>(
+        (const SingleVal*) a, (const SingleVal*) d_o, (float*) s, n, k);
 
     blockDim.x = 32;
     blockDim.y = 1;
@@ -331,30 +386,56 @@ void linear_recurrence_backward_cuda(
     gridDim.x = (n + blockDim.y * LENGTH_PER_WARP - 1) / (blockDim.y * LENGTH_PER_WARP);
     gridDim.y = (k + FEATS_PER_WARP - 1) / FEATS_PER_WARP;
 
-    linear_recurrence_backward_kernel_third<<<gridDim, blockDim>>>((const half*) a, (const half*) o, (const float*) s, (half*) d_a, (half*) d_x, (const half*) d_o, n, k);
+    linear_recurrence_backward_kernel_third<SingleVal, DoubleVal><<<gridDim, blockDim>>>(
+        (const SingleVal*) a, (const SingleVal*) o, (const float*) s, (SingleVal*) d_a, (SingleVal*) d_x, (const SingleVal*) d_o, n, k);
 }
 
-// void conv1d_backward_cuda(
-//                         void *x,
-//                         void *w, void* s, void *d_o,
-//                         void *d_x, void *d_w,
-//                         int n, int k) {
-//     dim3 blockDim, gridDim;
-    
-//     blockDim.x = 32;
-//     blockDim.y = 8;
+void linear_recurrence_forward_cuda_fp32(
+                        void *a,
+                        void *x, void *o, void* s,
+                        int n, int k) {
+                            linear_recurrence_forward_cuda<float, float2>(a, x, o, s, n, k);
+                        }
 
-//     gridDim.x = (n + 8 * LENGTH_PER_WARP - 1) / (8 * LENGTH_PER_WARP);
-//     gridDim.y = (k + FEATS_PER_WARP - 1) / FEATS_PER_WARP;
+void linear_recurrence_backward_cuda_fp32(
+        void *a, void *o, void *s,
+        void* d_a, void* d_x, void* d_o,
+        int n, int k) {
+            linear_recurrence_backward_cuda<float, float2>(a, o, s, d_a, d_x, d_o, n, k);
+        }
 
-//     conv1d_backward_kerenl<<<gridDim, blockDim>>>(
-//         (const half*) x, (const half*) w, (const uint8_t*) s, 
-//         (const half*) d_o, 
-//         (half*) d_x, (float*) d_w, 
-//         n, k);
-// }
+
+void linear_recurrence_forward_cuda_fp16(
+                        void *a,
+                        void *x, void *o, void* s,
+                        int n, int k) {
+                            linear_recurrence_forward_cuda<half, half2>(a, x, o, s, n, k);
+                        }
+
+void linear_recurrence_backward_cuda_fp16(
+        void *a, void *o, void *s,
+        void* d_a, void* d_x, void* d_o,
+        int n, int k) {
+            linear_recurrence_backward_cuda<half, half2>(a, o, s, d_a, d_x, d_o, n, k);
+        }
+
+
+void linear_recurrence_forward_cuda_bf16(
+                        void *a,
+                        void *x, void *o, void* s,
+                        int n, int k) {
+                            linear_recurrence_forward_cuda<__nv_bfloat16, __nv_bfloat162>(a, x, o, s, n, k);
+                        }
+
+void linear_recurrence_backward_cuda_bf16(
+        void *a, void *o, void *s,
+        void* d_a, void* d_x, void* d_o,
+        int n, int k) {
+            linear_recurrence_backward_cuda<__nv_bfloat16, __nv_bfloat162>(a, o, s, d_a, d_x, d_o, n, k);
+        }
 
 std::vector<int> linear_recurrence_scratch_space(int n, int k) {
     int num_segments = (n + LENGTH_PER_WARP - 1) / LENGTH_PER_WARP;
     return {num_segments, 2, k}; 
 }
+

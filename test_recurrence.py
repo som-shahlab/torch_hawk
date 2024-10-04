@@ -3,7 +3,14 @@ import torch
 import torch_hawk
 
 dtype = torch.float32
-device = torch.device('cpu')
+device = torch.device('cuda')
+
+if dtype == torch.float32:
+    rtol=1e-6
+    atol=1e-6
+else:
+    rtol = 1e-3
+    atol = 1e-3
 
 n = 20
 k = 2
@@ -37,13 +44,13 @@ for i in range(n):
 
 o2 = torch.stack(result, dim=0)
 
-print(o2)
+#print(o2)
 
 o1 = torch_hawk.linear_recurrence(a_copy, x_copy)
 
-print(o1)
+#print(o1)
 
-assert torch.allclose(o1, o2, rtol=1e-3, atol=1e-3)
+assert torch.allclose(o1, o2, rtol=rtol, atol=atol)
 
 total = (o1 * d_o).sum()
 total.backward()
@@ -55,18 +62,18 @@ total.backward()
 assert x.grad is not None
 assert x_copy.grad is not None
 
-print(x.grad)
+#print(x.grad)
 
-print(x_copy.grad)
+#print(x_copy.grad)
 
-assert torch.allclose(x_copy.grad, x.grad, rtol=1e-3, atol=1e-3)
+assert torch.allclose(x_copy.grad, x.grad, rtol=rtol, atol=atol)
 
 
 assert a.grad is not None
 assert a_copy.grad is not None
 
-print(a.grad)
+#print(a.grad)
 
-print(a_copy.grad)
+#print(a_copy.grad)
 
-assert torch.allclose(a_copy.grad, a.grad, rtol=1e-2, atol=1e-2)
+assert torch.allclose(a_copy.grad, a.grad, rtol=rtol, atol=atol)

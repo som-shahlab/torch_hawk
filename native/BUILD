@@ -23,6 +23,7 @@ pybind_extension(
     name="_torch_hawk",
     srcs=[
         "torch_hawk.cc",
+        "dlpack.h",
     ],
     linkopts = select({
         "@platforms//os:osx": ["-undefined", "dynamic_lookup"],
@@ -32,4 +33,9 @@ pybind_extension(
         ":conv1d_cuda",
         ":linear_recurrence_cuda",
     ],
+)
+
+cc_binary(
+    name="simple_test",
+    srcs=["simple_test.cc"],
 )

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 cd native
-bazel build -c fastbuild _torch_hawk.so
+bazel build -c dbg _torch_hawk.so
 cd ..
 
 rm -f src/torch_hawk/_torch_hawk*
