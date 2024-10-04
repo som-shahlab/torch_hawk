@@ -20,6 +20,22 @@ jobs:
       CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
 
     steps:
+    - name: Free Disk Space (Ubuntu)
+      uses: jlumbroso/free-disk-space@main
+      with:
+        # this might remove tools that are actually needed,
+        # if set to "true" but frees about 6 GB
+        tool-cache: false
+        
+        # all of these default to true, but feel free to set to
+        # "false" if necessary for your workflow
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        docker-images: true
+        swap-storage: true
+
     - uses: actions/checkout@v4
 
     - name: Build wheels
@@ -66,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/meds_reader  # Replace <package-name> with your PyPI project name
+      url: https://pypi.org/p/torch_hawk  # Replace <package-name> with your PyPI project name
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
 
