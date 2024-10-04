@@ -166,9 +166,6 @@ import math
 from typing import Literal, NamedTuple, Optional, overload
 
 import einops
-from recurrentgemma import common
-from recurrentgemma.torch import array_typing as at
-from recurrentgemma.torch import layers
 import torch
 from torch import nn
 import torch_hawk
@@ -269,8 +266,7 @@ class BlockDiagonalLinear(nn.Module):
     std = math.sqrt(self.w_init_variance_scale / self.block_width)
     torch.nn.init.normal_(w, mean=0.0, std=std)
 
-  @at.typed
-  def forward(self, x: at.ExpandedActivations) -> at.ExpandedActivations:
+  def forward(self, x: torch.Tensor) -> torch.Tensor:
     """Calls the BlockDiagonalLinear."""
     # Split x to blocks.
     x = einops.rearrange(x, "... (h i) -> ... h i", h=self.num_blocks)
@@ -343,12 +339,9 @@ class RGLRU(nn.Module):
     """Initializes the `A` parameter of the RG-LRU."""
     return rnn_param_init(w, min_rad=0.9, max_rad=0.999)
   
-  @at.typed
   def forward(
-      self,
-      x: at.ExpandedActivations,
-      s: Optional[at.SegmentPos],
-  ) -> at.ExpandedActivations:
+          self, x: torch.Tensor, s: Optional[torch.Tensor]
+  ) -> torch.Tensor:
     """Calls the RG-LRU.
 
     Args:
@@ -447,12 +440,11 @@ class Conv1D(nn.Module):
     std = math.sqrt(self.w_init_variance_scale / self.temporal_width)
     torch.nn.init.normal_(w, mean=0.0, std=std)
 
-  @at.typed
   def forward(
       self,
-      x: at.ExpandedActivations,
-      s: Optional[at.SegmentPos],
-  ) -> at.ExpandedActivations:
+      x: torch.Tensor,
+      s: Optional[torch.Tensor],
+      ) -> torch.Tensor:
     """Calls the Conv1D.
 
     Args:
@@ -569,12 +561,11 @@ class RecurrentBlock(nn.Module):
     std = math.sqrt(self.final_w_init_variance_scale / self.lru_width)
     torch.nn.init.normal_(w, mean=0.0, std=std)
 
-  @at.typed
   def forward(
       self,
-      x: at.Activations,
-      s: Optional[at.Activations] = None,
-  ) -> at.Activations:
+      x: torch.Tensor, 
+      s: Optional[torch.Tensor] = None,
+  ) -> torch.Tensor:
     """Calls the recurrent block.
 
     Args:
