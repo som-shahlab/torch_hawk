@@ -3,8 +3,8 @@ import torch
 import torch_hawk
 
 def test_main():
-    dtype = torch.float16
-    device = torch.device('cuda')
+    dtype = torch.float32
+    device = torch.device('cpu')
 
     n = 200
     r = 5

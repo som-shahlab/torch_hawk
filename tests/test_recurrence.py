@@ -5,7 +5,7 @@ import torch_hawk
 def test_main():
 
     dtype = torch.float32
-    device = torch.device('cuda')
+    device = torch.device('cpu')
 
     if dtype == torch.float32:
         rtol=1e-6
