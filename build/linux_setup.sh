@@ -11,7 +11,7 @@ dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda
 dnf makecache
 
 #  dnf module install nvidia-driver:latest-dkms
-dnf -y install cuda-toolkit
+dnf -y install cuda-toolkit-12-2
 
 export PATH=/usr/local/cuda-12.6/bin${PATH:+:${PATH}}
 
