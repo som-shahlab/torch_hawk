@@ -13,6 +13,6 @@ dnf makecache
 #  dnf module install nvidia-driver:latest-dkms
 dnf -y install cuda-toolkit-12-2
 
-export PATH=/usr/local/cuda-12.6/bin${PATH:+:${PATH}}
+export PATH=/usr/local/cuda-12.2/bin${PATH:+:${PATH}}
 
 nvcc --version
