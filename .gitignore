@@ -8,6 +8,8 @@ docs/source/meds_reader.py
 docs/source/README_copy.md
 src/meds_reader/meds_reader_convert
 
+native/MODULE.bazel.lock
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
